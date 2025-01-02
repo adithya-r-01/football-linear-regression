@@ -1,0 +1,424 @@
+---
+title: "Home Field Advantage? A Statistical Dive into Soccer Betting Lines"
+author: "STAT 420, Fall 2024, Adithya Ramanujam, Zihan Qiu, Utkarsh Prasad"
+date: 'December 15'
+output:
+  html_document: 
+    theme: readable
+    toc: yes
+  pdf_document: default
+urlcolor: cyan
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+## Introduction
+
+The challenge of computing win probabilities in soccer is more than just a fun math problem — it’s a driving force behind a multibillion-dollar industry. Whether it’s predicting outcomes to enhance fan engagement, fueling the betting markets, or shaping coaching strategies, understanding the game through data adds immense value. At its heart, this involves translating the complex interplay of team strategies, individual player performances, and contextual factors like home-field advantage into actionable insights. By modeling these dynamics, we can go beyond intuition to deliver measurable, predictive intelligence that transforms how the game is analyzed and understood.
+
+This project focuses on building a model to predict home-team win probability in soccer. The foundation of this work is the European Soccer Database, a comprehensive dataset featuring over 25,000 matches, team and player attributes, and betting odds. Using these rich data sources, we aim to identify patterns and key variables that influence match outcomes. This approach not only highlights the strategic and performance-based elements of the sport but also demonstrates the power of data in uncovering hidden trends.
+
+The dataset includes tactical characteristics such as build-up play speed, defensive pressure, and passing effectiveness at both the team and player levels. It also incorporates categorical variables, like defensive setups and chance creation positioning, to provide a nuanced view of team styles. By leveraging these insights, the ultimate goal is to create an accurate predictive model that captures the essence of soccer performance, offering value to analysts, coaches, and enthusiasts alike.
+
+
+## Methodology
+
+The methodology section outlines the rationale and discrete steps taken to construct the appropriate dataset, make a model, and interpret its results. Code snippets are included to demonstrate that process.
+
+### Data Cleaning
+
+The cleaning process aimed to ensure that the final analytical dataset contained only well-formed observations with all necessary attributes, merged correctly across the `Match`, `Team_Attributes`, and `Player_Attributes` tables from the original European Soccer Dataset.
+
+We began by connecting to the provided SQLite database (`database.sqlite`) and reading in the `Match`, `Team_Attributes`, and `Player_Attributes` tables. Since our focus was on match-level outcomes with team and player characteristics, these three tables were chosen based on their relevance.
+
+```{r}
+library(tidyverse)
+library(DBI)
+library(RSQLite)
+suppressPackageStartupMessages({
+  library(data.table)
+})
+
+con = dbConnect(RSQLite::SQLite(), "database.sqlite")
+
+match_table = dbReadTable(con, "Match")
+team_table = dbReadTable(con, "Team_Attributes")
+player_table = dbReadTable(con, "Player_Attributes")
+
+dbDisconnect(con)
+```
+
+At this stage, only the necessary columns from the Match table—such as team identifiers, betting odds (`B365H`), and the player IDs for each starting position—were retained via `dplyr::select()`.
+
+```{r}
+match_select = match_table %>% select(
+  id, date, home_team_api_id, away_team_api_id, B365H,
+  home_player_1, home_player_2, home_player_3, 
+  home_player_4, home_player_5, home_player_6,
+  home_player_7, home_player_8, home_player_9,
+  home_player_10, home_player_11, away_player_1,
+  away_player_2, away_player_3, away_player_4, 
+  away_player_5, away_player_6, away_player_7,
+  away_player_8, away_player_9, away_player_10,
+  away_player_11
+)
+```
+
+Because our analysis required a well-formed dataset, we filtered out any rows in the Match data that were missing critical information. Specifically, we removed matches that did not have complete data for both teams’ IDs, the betting odds, and the 11 starting player IDs for both home and away teams.
+
+```{r}
+match_filter = match_select %>%
+  filter(!is.na(home_team_api_id) & !is.na(away_team_api_id) & !is.na(B365H) & 
+         !is.na(home_player_1) & !is.na(home_player_2) & !is.na(home_player_3) &
+         !is.na(home_player_4) & !is.na(home_player_5) & !is.na(home_player_6) &
+         !is.na(home_player_7) & !is.na(home_player_8) & !is.na(home_player_9) &
+         !is.na(home_player_10) & !is.na(home_player_11) &
+         !is.na(away_player_1) & !is.na(away_player_2) & !is.na(away_player_3) &
+         !is.na(away_player_4) & !is.na(away_player_5) & !is.na(away_player_6) &
+         !is.na(away_player_7) & !is.na(away_player_8) & !is.na(away_player_9) &
+         !is.na(away_player_10) & !is.na(away_player_11)
+         )
+team_filter <- team_table %>% 
+  drop_na(buildUpPlaySpeed, chanceCreationShooting, defencePressure, defenceTeamWidth)
+player_select = player_table  %>% select(
+  player_api_id, overall_rating
+)
+player_filter <- player_select %>% 
+  drop_na(player_api_id, overall_rating)
+
+```
+
+This step ensured that all matches included in the final dataset had full, consistent information necessary for subsequent merges and analyses.
+
+Key team-level predictors—such as `buildUpPlaySpeed`, `chanceCreationShooting`, `defencePressure`, and `defenceTeamWidth`—were sourced from the `Team_Attributes` table. These attributes were joined onto the Match data using foreign keys `(home_team_api_id` and `away_team_api_id`), ensuring each match record was augmented with corresponding team-level characteristics. This merge was done twice: once for the home team and once for the away team.
+
+```{r}
+con <- dbConnect(SQLite(), "database.sqlite")
+
+dbWriteTable(con, "filtered_matches", match_filter, temporary = TRUE, overwrite = TRUE)
+dbWriteTable(con, "filtered_teams", team_filter, temporary = TRUE, overwrite = TRUE)
+query <- "
+SELECT 
+  fm.id,
+  fm.date,
+  fm.home_team_api_id,
+  fm.away_team_api_id,
+  fm.B365H,
+  
+  -- Include home players
+  fm.home_player_1,
+  fm.home_player_2,
+  fm.home_player_3,
+  fm.home_player_4,
+  fm.home_player_5,
+  fm.home_player_6,
+  fm.home_player_7,
+  fm.home_player_8,
+  fm.home_player_9,
+  fm.home_player_10,
+  fm.home_player_11,
+
+  -- Include away players
+  fm.away_player_1,
+  fm.away_player_2,
+  fm.away_player_3,
+  fm.away_player_4,
+  fm.away_player_5,
+  fm.away_player_6,
+  fm.away_player_7,
+  fm.away_player_8,
+  fm.away_player_9,
+  fm.away_player_10,
+  fm.away_player_11,
+  
+  -- Home team attributes: closest date on or before match date
+  (SELECT buildUpPlaySpeed 
+   FROM filtered_teams tt 
+   WHERE tt.team_api_id = fm.home_team_api_id
+   ORDER BY tt.date DESC 
+   LIMIT 1) AS buildUpPlaySpeed_home,
+   
+  (SELECT chanceCreationShooting 
+   FROM filtered_teams tt 
+   WHERE tt.team_api_id = fm.home_team_api_id
+   ORDER BY tt.date DESC
+   LIMIT 1) AS chanceCreationShooting_home,
+   
+  (SELECT defencePressure 
+   FROM filtered_teams tt 
+   WHERE tt.team_api_id = fm.home_team_api_id
+   ORDER BY tt.date DESC
+   LIMIT 1) AS defencePressure_home,
+   
+  (SELECT defenceTeamWidth 
+   FROM filtered_teams tt 
+   WHERE tt.team_api_id = fm.home_team_api_id
+   ORDER BY tt.date DESC
+   LIMIT 1) AS defenceTeamWidth_home,
+
+  -- Away team attributes: similar logic
+  (SELECT buildUpPlaySpeed 
+   FROM filtered_teams tt 
+   WHERE tt.team_api_id = fm.away_team_api_id
+   ORDER BY tt.date DESC 
+   LIMIT 1) AS buildUpPlaySpeed_away,
+   
+  (SELECT chanceCreationShooting 
+   FROM filtered_teams tt 
+   WHERE tt.team_api_id = fm.away_team_api_id
+   ORDER BY tt.date DESC
+   LIMIT 1) AS chanceCreationShooting_away,
+   
+  (SELECT defencePressure 
+   FROM filtered_teams tt 
+   WHERE tt.team_api_id = fm.away_team_api_id
+   ORDER BY tt.date DESC
+   LIMIT 1) AS defencePressure_away,
+   
+  (SELECT defenceTeamWidth 
+   FROM filtered_teams tt 
+   WHERE tt.team_api_id = fm.away_team_api_id
+   ORDER BY tt.date DESC
+   LIMIT 1) AS defenceTeamWidth_away
+
+FROM filtered_matches fm;
+"
+
+final_matches <- dbGetQuery(con, query)
+
+dbDisconnect(con)
+```
+
+To incorporate player quality, we extracted `overall_rating` from the `Player_Attributes` table for each home and away player listed in a match. These player IDs were then merged with player attributes, and we computed the total rating sums by team for each match.
+
+```{r}
+con <- dbConnect(SQLite(), "database.sqlite")
+
+dbWriteTable(con, "filtered_players", player_filter, temporary = TRUE, overwrite = TRUE)
+
+players <- dbGetQuery(con, "SELECT player_api_id, overall_rating FROM filtered_players")
+
+dbDisconnect(con)
+
+rating_map <- setNames(players$overall_rating, players$player_api_id)
+
+final_matches_with_ratings <- final_matches %>%
+  rowwise() %>%
+  mutate(
+    total_home_rating = sum(
+      rating_map[home_player_1],
+      rating_map[home_player_2],
+      rating_map[home_player_3],
+      rating_map[home_player_4],
+      rating_map[home_player_5],
+      rating_map[home_player_6],
+      rating_map[home_player_7],
+      rating_map[home_player_8],
+      rating_map[home_player_9],
+      rating_map[home_player_10],
+      rating_map[home_player_11],
+      na.rm = TRUE
+    ),
+    total_away_rating = sum(
+      rating_map[away_player_1],
+      rating_map[away_player_2],
+      rating_map[away_player_3],
+      rating_map[away_player_4],
+      rating_map[away_player_5],
+      rating_map[away_player_6],
+      rating_map[away_player_7],
+      rating_map[away_player_8],
+      rating_map[away_player_9],
+      rating_map[away_player_10],
+      rating_map[away_player_11],
+      na.rm = TRUE
+    )
+  ) %>%
+  ungroup()
+```
+
+After merging team- and player-level data, we transformed raw measures into comparative metrics. For instance, we computed differences between the home and away teams’ attributes (e.g., `buildUpPlaySpeed_home` \- `buildUpPlaySpeed_away`), resulting in relative measures of team strengths. We also combined player ratings into a single feature (`totalRating`) reflecting the strength differential between home and away teams.
+
+```{r}
+match_clean <- final_matches_with_ratings %>%
+ mutate(
+   buildUpPlaySpeed = buildUpPlaySpeed_home - buildUpPlaySpeed_away,
+   chanceCreationShooting = chanceCreationShooting_home - chanceCreationShooting_away,
+   defencePressure = defencePressure_home - defencePressure_away,
+   defenceTeamWidth = defenceTeamWidth_home - defenceTeamWidth_away,
+   totalRating = total_home_rating - total_away_rating
+ ) %>%
+ select(
+   buildUpPlaySpeed, 
+   chanceCreationShooting, 
+   defencePressure, 
+   defenceTeamWidth, 
+   totalRating,
+   B365H
+ )
+```
+
+Extraneous columns were also removed, leaving a streamlined dataset containing the core variables required for modeling: team-level tactical differences, aggregate player rating differences, and the betting odds outcome (B365H).
+
+### Model Evaluation
+
+We first start by setting the preconditions for analysis:
+
+```{r}
+match_analysis = match_clean %>%
+  filter(!is.na(buildUpPlaySpeed),
+         !is.na(chanceCreationShooting),
+         !is.na(defencePressure),
+         !is.na(defenceTeamWidth),
+         !is.na(totalRating),
+         !is.na(B365H))
+
+set.seed(123)
+train_indices = sample(seq_len(nrow(match_analysis)), size = 0.7 * nrow(match_analysis))
+train_data = match_analysis[train_indices, ]
+test_data = match_analysis[-train_indices, ]
+
+train_data$log_B365H = log(train_data$B365H)
+test_data$log_B365H = log(test_data$B365H)
+```
+
+After fitting an initial linear model to predict `B365H`, we examined residual diagnostics for the initial residual diagnostic plots and found deviations from normality and signs of non-constant variance. These findings motivated us to try alternative transformations and models.
+
+```{r}
+lm_model = lm(B365H ~ buildUpPlaySpeed + chanceCreationShooting + defencePressure + defenceTeamWidth + totalRating, 
+            data = match_analysis)
+
+match_analysis$predicted_B365H <- predict(lm_model, newdata = match_analysis)
+match_analysis$residuals <- residuals(lm_model)
+head(match_analysis[, c("B365H", "predicted_B365H", "residuals")])
+
+par(mfrow = c(2, 2))
+plot(lm_model)
+par(mfrow = c(1, 1))
+```
+
+The initial diagnostic plots indicated issues such as non-linear patterns in the residuals and long-tailed distributions. These suggest that the linear model may not adequately capture the relationship between the predictors and `B365H.` We also measured MSE:
+
+```{r}
+test_data$pred_B365H_lm = predict(lm_model, newdata = test_data)
+mse_lm = mean((test_data$B365H - test_data$pred_B365H_lm)^2)
+mse_lm
+```
+
+To address the skewed distribution of B365H, we applied a log-transformation to the response. This stabilizes variance and improves model fit when dealing with skewed variables. After splitting the data into training (70%) and test (30%) sets, the transformed model (`log_model`) was trained on the training set.
+
+```{r}
+log_model = lm(log_B365H ~ buildUpPlaySpeed + chanceCreationShooting +
+                 defencePressure + defenceTeamWidth + totalRating,
+               data = train_data)
+
+test_data$log_pred = predict(log_model, newdata = test_data)
+test_data$pred_B365H_log = exp(test_data$log_pred)
+
+mse_log = mean((test_data$B365H - test_data$pred_B365H_log)^2)
+mse_log
+```
+
+We also explored Lasso regression via `glmnet`.
+
+```{r}
+library(glmnet)
+
+X_train = model.matrix(log_B365H ~ buildUpPlaySpeed + chanceCreationShooting +
+                         defencePressure + defenceTeamWidth + totalRating,
+                       data = train_data)[,-1]
+y_train = train_data$log_B365H
+
+X_test = model.matrix(log_B365H ~ buildUpPlaySpeed + chanceCreationShooting +
+                        defencePressure + defenceTeamWidth + totalRating,
+                      data = test_data)[,-1]
+y_test = test_data$log_B365H
+
+lasso_model = glmnet(X_train, y_train, alpha = 1)
+cv_lasso = cv.glmnet(X_train, y_train, alpha = 1)
+best_lambda = cv_lasso$lambda.min
+
+log_pred_lasso = predict(cv_lasso, newx = X_test, s = best_lambda)
+pred_lasso = exp(log_pred_lasso)
+mse_lasso = mean((test_data$B365H - pred_lasso)^2)
+mse_lasso
+```
+
+We also explored a non-linear method: a Random Forest. 
+
+```{r}
+library(ranger)
+rf_model = ranger(log_B365H ~ buildUpPlaySpeed + chanceCreationShooting +
+                    defencePressure + defenceTeamWidth + totalRating,
+                  data = train_data, num.trees = 500)
+rf_preds_log = predict(rf_model, test_data)$predictions
+rf_preds = exp(rf_preds_log)
+mse_rf = mean((test_data$B365H - rf_preds)^2)
+mse_rf
+```
+
+
+## Results
+
+After testing multiple models in the Methodology section we must evaluate which one is best for the dataset and run the chosen model against the dataset in order to evaluate the overall performance of the model and its applicability.
+
+### Model Selection
+
+In order to identify the best predictive model for our dataset, we compared multiple modeling approaches and selected the one that minimized the Mean Squared Error (MSE) on a held-out test set. The MSE is a common measure of predictive accuracy, quantifying how close the model’s predictions are to the observed values—lower values indicate better performance.
+
+We initially fit a regular linear regression model, which produced an MSE of approximately 1.67. Recognizing possible skew and heavy tails, we then tried a log-transformed linear model, reducing the MSE to about 1.46. Applying Lasso regularization yielded a similar improvement to around 1.47, controlling for potential overfitting and multicollinearity. Finally, we applied a Random Forest, a non-linear ensemble method that can capture complex interactions, which further reduced the MSE to roughly 0.73.
+
+Given that the Random Forest achieved the lowest MSE, it proved to be the most effective model among those tested for predicting `B365H` in our dataset.
+
+```{r}
+mse_table = data.frame(
+  Model = c("Regular LM", "Log-Transformed LM", "Lasso", "Random Forest"),
+  MSE = c(mse_lm, mse_log, mse_lasso, mse_rf)
+)
+
+print(mse_table)
+```
+
+From a relative standpoint, the Random Forest model shows a strong improvement over the linear and Lasso models. However we will need to run this model against the dataset and interpret the results to see how _good_ the model actually is.
+
+### Model Testing
+
+We then proceeded to evaluate the model quite simply by plotting the observed results over the predicted and seeing the observed linearity.
+
+```{r}
+library(ggplot2)
+
+ggplot(test_data, aes(x = B365H, y = rf_preds)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(
+    x = "Actual",
+    y = "Predicted (Random Forest)",
+    title = "Random Forest Predictions vs. Actual Values"
+  ) +
+  theme_minimal()
+```
+This model does not capture the dataset well however it does show  inclinations of capturing the positive nature of the trend well - overall this model is not suited for any real world use yet and requires further tuning and parameter selection.
+
+### Discussion
+
+The results from the Random Forest model, while achieving the lowest Mean Squared Error (MSE) of approximately 2.106065	 compared to other models, reveal some limitations when visualized in the scatter plot of predicted vs actual values. The scatter plot shows that while the model performs reasonably well for lower values of the betting odds (`B365H`), it struggles to generalize as the actual values increase. Specifically, the predictions appear to cluster and underestimate higher odds, which is evident from the vertical stacking of points at higher actual values.
+
+This discrepancy suggests that while the Random Forest model can capture the general trends and relationships within the data, it may not fully account for outliers or extreme cases where the odds are particularly high. The red reference line y = x highlights the deviations, especially in the upper range, where predictions consistently fall below the actual values. This behavior is likely due to the inherent variability in betting odds for soccer matches, which may be influenced by factors not captured in the dataset, such as external circumstances (e.g., injuries, weather, referee decisions).
+
+Moreover, the dense clustering for lower B365H values suggests that the model performs well for common odds but has limited precision in handling the full distribution. This could indicate that the Random Forest, despite its flexibility, is still somewhat constrained by the features used and may require additional predictors or data transformations to improve accuracy at the tails of the distribution.
+
+In summary, while the Random Forest model provides the best performance among those tested, it exhibits noticeable weaknesses at higher odds. To address this, future work could focus on:
+Incorporating additional predictors such as recent form, weather conditions, or player injuries to better model variability.
+
+Testing ensemble methods that combine predictions from multiple models to improve robustness.
+Exploring resampling techniques to balance predictions across the entire range of `B365H` values.
+
+These steps would help refine the predictive power of the model and provide a more accurate representation of betting odds across all ranges, ultimately aligning the predictions more closely with observed outcomes.
+
+In terms of how this model could be extended and it's applicability into its target use case, we found out that the science behind creating statistical methods for sports betting odds extends far beyond linear models and broaches on more advanced machine learning concepts. The number of parameters at play, the degree of variability, and the delicate nature of the states lends credence to the fact that building a sports betting model is hard - _even if the goal of the model is to predict an existing model_. 
+
+
+
