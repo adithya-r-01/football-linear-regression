@@ -13,14 +13,16 @@
 The dataset used for this project is the European Soccer Database, sourced from [Kaggle](https://www.kaggle.com/datasets/hugomathien/soccer/code). This dataset includes information about over 25,000 matches, attributes for teams and players, and betting odds. The focus of this analysis is to leverage both team-level attributes and player-level characteristics to predict the `home_team_win_probability`, derived from pre-match attributes.
 
 The dataset was aggregated from three separate data sources:
-- http://football-data.mx-api.enetscores.com/  : scores, lineup, team formation and events
-- http://www.football-data.co.uk/ : betting odds. Click here to understand the column naming system for betting odds:
-- http://sofifa.com/ : players and teams attributes from EA Sports FIFA games. FIFA series and all FIFA assets property of EA Sports.
+- [MX API](http://football-data.mx-api.enetscores.com/)  : scores, lineup, team formation and events
+- [Football Data](http://www.football-data.co.uk/) : betting odds. Click here to understand the column naming system for betting odds:
+- [sofifa](http://sofifa.com/) : players and teams attributes from EA Sports FIFA games. FIFA series and all FIFA assets property of EA Sports.
 
 For the full citation of the dataset:
 
 ```
-Mathein, H. (October,2016). European Soccer Database, 2.0. Retrieved Nov. 10, 2024 from https://www.kaggle.com/datasets/hugomathien/soccer/data.
+Mathein, H. (October,2016). European Soccer Database, 2.0.
+Retrieved Nov. 10, 2024
+from https://www.kaggle.com/datasets/hugomathien/soccer/data.
 ```
 
 ## Running The Analysis
